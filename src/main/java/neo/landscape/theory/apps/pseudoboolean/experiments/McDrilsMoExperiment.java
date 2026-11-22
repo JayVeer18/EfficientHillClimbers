@@ -8,9 +8,11 @@ import neo.landscape.theory.apps.pseudoboolean.hillclimbers.RBallEfficientHillCl
 import neo.landscape.theory.apps.pseudoboolean.problems.EmbeddedLandscape;
 import neo.landscape.theory.apps.pseudoboolean.problems.MultiObjLandscapeConfigurator;
 import neo.landscape.theory.apps.pseudoboolean.problems.MultiObjectiveLandscape;
+import neo.landscape.theory.apps.pseudoboolean.px.CrossoverInternal;
 import neo.landscape.theory.apps.pseudoboolean.px.QPartitionCrossover;
 import neo.landscape.theory.apps.pseudoboolean.px.RBallCrossover;
 import neo.landscape.theory.apps.pseudoboolean.px.RBallCrossoverAdaptor;
+import neo.landscape.theory.apps.pseudoboolean.px.TransitionQPartitionCrossover;
 import neo.landscape.theory.apps.pseudoboolean.util.NonDominatedSet;
 import neo.landscape.theory.apps.util.Process;
 import neo.landscape.theory.apps.util.Seeds;
@@ -72,6 +74,8 @@ public class McDrilsMoExperiment implements Process {
     private static final String PROBLEM_CHAR = "P";
     private static final String STEP_SIZE = "step_size";
     private static final String DEBUG_ARGUMENT = "debug";
+    private static final String CROSSOVER_ARGUMENT = "crossover";
+    private static final String DELTA_ARGUMENT = "delta";
 
     // --- Regularization Parameter ---
     private static final double EPSILON_WEIGHT = 0.005;
@@ -123,6 +127,8 @@ public class McDrilsMoExperiment implements Process {
             options.addOption(EXPLORED_SOLUTIONS, true, "Solutions limit (per weight step)");
             options.addOption(ALGORITHM_SEED_ARGUMENT, true, "Seed");
             options.addOption(DEBUG_ARGUMENT, false, "Enable full trajectory logging");
+            options.addOption(CROSSOVER_ARGUMENT, true, "Crossover operator: [qpx, mopx] (default: qpx)");
+            options.addOption(DELTA_ARGUMENT, true, "Micro-sweep delta window (default: 0.0 for full sweep)");
             options.addOption(Option.builder(PROBLEM_CHAR).numberOfArgs(2).valueSeparator().argName("P=V").desc("Properties").build());
         }
         return options;
@@ -154,11 +160,27 @@ public class McDrilsMoExperiment implements Process {
 
             // 2. Setup Archive & Crossover
             archive = new NonDominatedSet(pbf.getN());
-            QPartitionCrossover paretoPx = new QPartitionCrossover(multiObjPbf);
-            paretoPx.setArchive(archive);
-            paretoPx.setSeed(seed);
-            paretoPx.setPrintStream(ps);
-            RBallCrossover px = new RBallCrossoverAdaptor(paretoPx);
+            String crossoverName = commandLine.getOptionValue(CROSSOVER_ARGUMENT, "qpx");
+
+            CrossoverInternal crossover;
+            if ("mopx".equals(crossoverName)) {
+                TransitionQPartitionCrossover mopx = new TransitionQPartitionCrossover(multiObjPbf);
+                mopx.setArchive(archive);
+                if (commandLine.hasOption(DELTA_ARGUMENT)) {
+                    mopx.setDelta(Double.parseDouble(commandLine.getOptionValue(DELTA_ARGUMENT)));
+                }
+                crossover = mopx;
+            } else if ("qpx".equals(crossoverName)) {
+                QPartitionCrossover qpx = new QPartitionCrossover(multiObjPbf);
+                qpx.setArchive(archive);
+                crossover = qpx;
+            } else {
+                throw new IllegalArgumentException("Unknown crossover: " + crossoverName + ". Available: [qpx, mopx]");
+            }
+
+            crossover.setSeed(seed);
+            crossover.setPrintStream(ps);
+            RBallCrossover px = new RBallCrossoverAdaptor(crossover);
 
             // 3. Setup Trajectory Logging
             if (commandLine.hasOption(OUT_FILE) && commandLine.hasOption(DEBUG_ARGUMENT)) {
