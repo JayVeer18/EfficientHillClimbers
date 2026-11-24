@@ -159,12 +159,40 @@ public class TransitionQPartitionCrossoverTest {
         }
     }
 
+    @Test
+    public void testChildMatchesQPXChild() {
+        int n = 50;
+        int k = 2;
+        NKLandscapes l1 = createNKLandscape(n, k, 12345L);
+        NKLandscapes l2 = createNKLandscape(n, k, 67890L);
+
+        MultiObjectiveLandscape moLandscape = new MultiObjectiveLandscape(l1, l2);
+        moLandscape.setWeights(new double[]{0.5, 0.5});
+
+        QPartitionCrossover qpx = new QPartitionCrossover(moLandscape);
+        TransitionQPartitionCrossover mopx = new TransitionQPartitionCrossover(moLandscape);
+
+        for (int run = 0; run < 10; run++) {
+            PBSolution blue = moLandscape.getRandomSolution();
+            PBSolution red = moLandscape.getRandomSolution();
+
+            qpx.setSeed(100L + run);
+            PBSolution childQPX = qpx.recombineInternal(blue, red);
+
+            mopx.setSeed(100L + run);
+            PBSolution childMOPX = mopx.recombineInternal(blue, red);
+
+            assertThat(childMOPX).isEqualTo(childQPX);
+        }
+    }
+
     public static void main(String[] args) {
         TransitionQPartitionCrossoverTest test = new TransitionQPartitionCrossoverTest();
         test.testCriticalWeightZeroCrossing();
         test.testRecombinationBiObjective();
         test.testMicroSweepWindowing();
         test.testRecombinationTriObjective();
+        test.testChildMatchesQPXChild();
         System.out.println("ALL TESTS PASSED SUCCESSFULLY");
     }
 }

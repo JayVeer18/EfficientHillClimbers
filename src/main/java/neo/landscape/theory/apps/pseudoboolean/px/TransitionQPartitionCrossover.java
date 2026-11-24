@@ -167,7 +167,7 @@ public class TransitionQPartitionCrossover extends PartitionCrossover {
     private final int[] touchedSubfnsBuffer;
 
     // Pre-allocated component differentials (flattened: [maxN * numObjectives])
-    private final PartitionComponent[] compArray;
+    private final boolean[] pickedBlue;
     private final double[] deltaRawObjsFlat;
     private final double[] compD0;
     private final double[] bestRawObjs;
@@ -196,7 +196,7 @@ public class TransitionQPartitionCrossover extends PartitionCrossover {
         }
 
         int maxN = el.getN();
-        this.compArray = new PartitionComponent[maxN];
+        this.pickedBlue = new boolean[maxN];
         this.deltaRawObjsFlat = new double[maxN * numObjectives];
         this.compD0 = new double[maxN];
         this.bestRawObjs = new double[numObjectives];
@@ -289,7 +289,6 @@ public class TransitionQPartitionCrossover extends PartitionCrossover {
         // 1. Decompose into independent partition components and compute differentials
         for (Integer node = nextNodeInReducedGraph(blue, red); node != null; node = nextNodeInReducedGraph(blue, red)) {
             PartitionComponent component = bfs(node, blue, red);
-            compArray[numberOfComponents] = component;
 
             evaluateComponentWeightedObjs(component, blue, blueValBuffer);
             evaluateComponentWeightedObjs(component, red, redValBuffer);
@@ -304,25 +303,22 @@ public class TransitionQPartitionCrossover extends PartitionCrossover {
             }
             compD0[numberOfComponents] = d0;
 
+            // Assemble optimal scalarized child bits and procedence directly while component is active
+            boolean pickBlue = (d0 > 0) || ((d0 == 0) && rnd.nextDouble() < 0.5);
+            pickedBlue[numberOfComponents] = pickBlue;
+            if (pickBlue) {
+                for (int var : component) {
+                    child.setBit(var, blue.getBit(var));
+                    varProcedence.markAsBlue(var);
+                }
+            }
+
             numberOfComponents++;
         }
 
         // 2. Perform transition sweeps and archive supported non-dominated offspring
         if (archive != null) {
             sweepTransitions(red);
-        }
-
-        // 3. Assemble and return the scalarized optimal child for the active search weights
-        for (int c = 0; c < numberOfComponents; c++) {
-            double d0 = compD0[c];
-            boolean pickBlue = (d0 > 0) || ((d0 == 0) && rnd.nextDouble() < 0.5);
-            if (pickBlue) {
-                PartitionComponent comp = compArray[c];
-                for (int var : comp) {
-                    child.setBit(var, blue.getBit(var));
-                    varProcedence.markAsBlue(var);
-                }
-            }
         }
 
         lastRuntime = System.nanoTime() - initTime;
@@ -337,9 +333,9 @@ public class TransitionQPartitionCrossover extends PartitionCrossover {
     private void sweepTransitions(PBSolution red) {
         evaluateFullRawObjs(red, bestRawObjs);
 
-        // A. Baseline: compute and archive the optimal solution under currentWeights
+        // A. Baseline: compute and archive the exact optimal solution for active weights
         for (int c = 0; c < numberOfComponents; c++) {
-            if (compD0[c] > 0) {
+            if (pickedBlue[c]) {
                 int flatOffset = c * numObjectives;
                 for (int m = 0; m < numObjectives; m++) {
                     bestRawObjs[m] += deltaRawObjsFlat[flatOffset + m];
@@ -351,7 +347,7 @@ public class TransitionQPartitionCrossover extends PartitionCrossover {
         // B. QPX Baseline: archive Hamming-1 neighbor deviations using zero-allocation buffer
         for (int c = 0; c < numberOfComponents; c++) {
             int flatOffset = c * numObjectives;
-            double sign = (compD0[c] > 0) ? -1.0 : 1.0;
+            double sign = pickedBlue[c] ? -1.0 : 1.0;
             for (int m = 0; m < numObjectives; m++) {
                 candidateBuffer[m] = bestRawObjs[m] + sign * deltaRawObjsFlat[flatOffset + m];
             }
@@ -369,9 +365,14 @@ public class TransitionQPartitionCrossover extends PartitionCrossover {
                 int flatOffset = c * numObjectives;
                 double dm = deltaRawObjsFlat[flatOffset + targetM];
 
-                // If signs differ, there is an exact zero-crossing point in (0, 1)
-                if ((d0 > 0 && dm < 0) || (d0 < 0 && dm > 0)) {
-                    double tStar = d0 / (d0 - dm);
+                // If flipping component improves targetM:
+                // If Blue is currently picked, flipping to Red improves targetM iff dm < 0
+                // If Red is currently picked, flipping to Blue improves targetM iff dm > 0
+                boolean canImproveTarget = (pickedBlue[c] && dm < 0) || (!pickedBlue[c] && dm > 0);
+                if (canImproveTarget && Math.abs(d0) > 1e-9) {
+                    double absD0 = Math.abs(d0);
+                    double absDm = Math.abs(dm);
+                    double tStar = absD0 / (absD0 + absDm);
                     if (tStar > 0.0 && tStar <= maxT) {
                         tradeOffCompIndex[rayTradeOffCount] = c;
                         transitionWeights[rayTradeOffCount] = tStar;
@@ -387,7 +388,7 @@ public class TransitionQPartitionCrossover extends PartitionCrossover {
                 for (int i = 0; i < rayTradeOffCount; i++) {
                     int c = tradeOffCompIndex[i];
                     int flatOffset = c * numObjectives;
-                    double flipSign = (compD0[c] > 0) ? -1.0 : 1.0;
+                    double flipSign = pickedBlue[c] ? -1.0 : 1.0;
                     for (int m = 0; m < numObjectives; m++) {
                         candidateBuffer[m] += flipSign * deltaRawObjsFlat[flatOffset + m];
                     }
