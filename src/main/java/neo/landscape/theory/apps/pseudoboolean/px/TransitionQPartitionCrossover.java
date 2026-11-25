@@ -8,149 +8,49 @@ import java.util.Arrays;
 import java.util.List;
 
 /**
- * <h1>Transition Q Partition Crossover (Transition-QPX / MOPX)</h1>
+ * Multi-Objective Partition Crossover with Critical Weight Transitions (MOPX).
  *
  * <p>
- * Implements an exact, zero-crossing critical weight transition sweep for Multi-Objective
- * Partition Crossover across an arbitrary number of objectives <i>M &ge; 2</i>.
- * Integrates directly with {@link neo.landscape.theory.apps.pseudoboolean.util.NonDominatedSet}
- * to archive supported Pareto-optimal offspring discovered along simplex rays.
+ * Given two parent solutions (blue and red), Partition Crossover decomposes
+ * the recombination space into q independent connected components on the
+ * reduced variable interaction graph, inducing a space of 2^q potential offspring.
  * </p>
  *
- * <h2>1. Theoretical Foundations &amp; Research Context</h2>
  * <p>
- * In Partition Crossover (PX), crossing two parents <i>P<sub>blue</sub></i> and <i>P<sub>red</sub></i>
- * decomposes into <i>q</i> independent connected components of differing variables on the reduced graph.
- * This defines a recombination hypercube of <i>2<sup>q</sup></i> candidate offspring.
+ * Standard QPX evaluates the scalarized best child under the current weight
+ * vector w and samples its q 1-Hamming distance neighbors.
+ * MOPX instead computes the exact critical transition weights where component
+ * choices flip along directional rays on the weight simplex.
  * </p>
- * <ul>
- *   <li><b>Evostar 2025 / GECCO 2027 Context:</b> Developed based on the collaboration between Darrell Whitley,
- *       Francisco Chicano, and Surendra Kurivella exploring whether critical weight zero-crossings can efficiently
- *       harvest the supported upper convex hull of PX offspring without exponential enumeration.</li>
- *   <li><b>Standard Multi-Objective PX (QPX):</b> Evaluates the single best child under active scalarization
- *       weights <i>w</i> plus its <i>q</i> Hamming-1 neighbors. While linear in cost <i>O(q)</i>, empirical evidence
- *       shows that Hamming-1 neighbors cluster tightly around the scalarized best child rather than spreading
- *       broadly across the Pareto front.</li>
- *   <li><b>Transition-QPX (MOPX):</b> Rather than sampling arbitrary weight steps or clustered Hamming-1 neighbors,
- *       this operator identifies the <b>exact zero-crossing thresholds</b> where the optimal parent choice
- *       for each component flips. Each transition point in <i>(0, 1)</i> produces a <b>distinct supported
- *       non-dominated offspring</b> on the crossover lattice in <i>O(M &middot; q log q)</i> total time.</li>
- * </ul>
  *
- * <h2>2. Mathematical Formulation &amp; Zero-Crossing Derivation</h2>
- *
- * <h3>2.1 Component Differentials</h3>
+ * <h3>Critical Weight Transitions</h3>
  * <p>
- * For each independent component <i>c &isin; {0, &hellip;, q-1}</i>, the raw objective differential vector is:
+ * For each component c, let &Delta;f[c] = f_blue[c] - f_red[c] be the raw objective
+ * differential vector. Under a parameterized ray w(t) = (1 - t) w + t e_m connecting
+ * the active search direction w to basis vertex e_m:
  * </p>
  * <pre>
- *   &Delta;f[c] = f_blue[c] - f_red[c] = (&Delta;f_1[c], &Delta;f_2[c], ..., &Delta;f_M[c])
+ *   &Delta;Fitness(t; c) = (1 - t) D_0[c] + t D_m[c]
  * </pre>
- *
- * <h3>2.2 Simplex Directional Rays</h3>
  * <p>
- * On the unit weight simplex (&sum; w_m = 1, w_m &ge; 0),
- * exploring from the active search vector <i>w</i> towards any basis vertex <i>e_m</i>
- * follows the parameterized ray:
+ * where D_0[c] = &sum; w_j &Delta;f_j[c] is the current scalar contribution,
+ * and D_m[c] = &Delta;f_m[c] is the contribution towards objective m.
+ * Setting &Delta;Fitness(t_c*; c) = 0 gives the critical transition parameter:
  * </p>
  * <pre>
- *   w(t) = (1 - t) w + t e_m,  where t &isin; [0, 1]
+ *   t_c* = |D_0[c]| / (|D_0[c]| + |D_m[c]|)
  * </pre>
  * <p>
- * Under parameter <i>t</i>, the scalarized contribution of component <i>c</i> is strictly linear:
- * </p>
- * <pre>
- *   &Delta;(t; c) = (1 - t) D_0[c] + t D_m[c]
- * </pre>
- * <p>
- * where:
- * </p>
- * <pre>
- *   D_0[c] = w &middot; &Delta;f[c] = &sum; w_j &Delta;f_j[c]
- *   D_m[c] = e_m &middot; &Delta;f[c] = &Delta;f_m[c]
- * </pre>
- *
- * <h3>2.3 Exact Zero-Crossing Thresholds</h3>
- * <p>
- * Component <i>c</i> transitions between parent procedences when its marginal scalar contribution passes through zero:
- * </p>
- * <pre>
- *   &Delta;(t_c*; c) = 0 &rArr; (1 - t_c*) D_0[c] + t_c* D_m[c] = 0
- *   &rArr; t_c* = D_0[c] / (D_0[c] - D_m[c])
- * </pre>
- *
- * <h3>2.4 Guaranteed Boundedness in (0, 1) &amp; Resolution of Darrell's Spreadsheet Dilemma</h3>
- * <p>
- * In Darrell Whitley's spreadsheet (<i>EQUALITIES of weight and alpha copy.xlsx</i>, row 37: <i>WEIGHTS without A0, a0</i>),
- * the calculation for Component 3 (with <i>A<sub>3</sub> = 4, a<sub>3</sub> = -6</i>) was written as:
- * </p>
- * <pre>
- *   w = a_3 / (a_3 + A_3) = -6 / (-6 + 4) = 3  (annotated as "NOT FRACTIONAL")
- * </pre>
- * <p>
- * The unexpected value <i>w = 3</i> occurred due to using addition in the denominator instead of subtraction from the zero-crossing equality:
- * </p>
- * <pre>
- *   w* A_3 + (1 - w*) a_3 = 0
- *   &rArr; w* (A_3 - a_3) = -a_3
- *   &rArr; w* = a_3 / (a_3 - A_3) = -6 / (-6 - 4) = 0.60 &isin; (0, 1)
- * </pre>
- * <p>
- * Similarly for Component 2 (<i>A<sub>2</sub> = -12, a<sub>2</sub> = 8</i>):
- * </p>
- * <pre>
- *   w* = a_2 / (a_2 - A_2) = 8 / (8 - (-12)) = 8 / 20 = 0.40 &isin; (0, 1)
- * </pre>
- * <p>
- * <b>General Boundedness Proof:</b> For any trade-off component, <i>D<sub>0</sub>[c]</i> and <i>D<sub>m</sub>[c]</i> have opposite signs.
- * Therefore, <i>D<sub>0</sub>[c] - D<sub>m</sub>[c] = |D<sub>0</sub>[c]| + |D<sub>m</sub>[c]| &gt; |D<sub>0</sub>[c]|</i>.
- * It follows that:
- * </p>
- * <pre>
- *   0 &lt; t_c* = |D_0[c]| / (|D_0[c]| + |D_m[c]|) &lt; 1
- * </pre>
- * <p>
- * Thus, all trade-off transitions are <b>strictly bounded in (0, 1)</b> without requiring any reference solution <i>P<sub>0</sub></i>.
- * Components where <i>D<sub>0</sub>[c]</i> and <i>D<sub>m</sub>[c]</i> share the same sign are unanimous (strictly dominated)
- * and have no zero-crossing in (0, 1).
+ * For components representing a trade-off (D_0 and D_m have opposite signs),
+ * t_c* is strictly in (0, 1). Sorting these transitions in O(q log q) time
+ * traces the upper convex hull of supported offspring along each ray.
  * </p>
  *
- * <h3>2.5 Dimensional Universality (M = 2 vs. M &ge; 3)</h3>
- * <ul>
- *   <li><b>Bi-objective (M = 2):</b> The two basis rays towards <i>e<sub>1</sub> = (1, 0)</i> and <i>e<sub>2</sub> = (0, 1)</i>
- *       cover the exact 1D line segment [0, 1]. Sorting these transitions in <i>O(q log q)</i> yields the complete
- *       supported upper convex hull of the <i>2<sup>q</sup></i> offspring space.</li>
- *   <li><b>Many-objective (M &ge; 3):</b> The <i>M</i> basis rays discover trade-off transitions along all simplex
- *       axes in <i>O(M &middot; q log q)</i> time, capturing non-clustered, supported offspring across the Pareto surface
- *       without requiring exponential enumeration of higher-dimensional simplex facets.</li>
- * </ul>
- *
- * <h2>3. Darrell's Micro-Sweep Windowing (&delta;)</h2>
+ * <h3>Micro-sweep Window (delta)</h3>
  * <p>
- * Supports localized search around the active search trajectory <i>w</i>:
+ * The parameter delta restricts the transition sweep to t &le; delta (0.0 implies
+ * a full ray sweep over [0, 1]).
  * </p>
- * <ul>
- *   <li>{@code delta <= 0.0}: Performs a full ray sweep over <i>t &isin; [0, 1]</i>.</li>
- *   <li>{@code delta > 0.0}: Restricts evaluations to <i>t &le; delta</i>, focusing offspring sampling
- *       within the immediate neighborhood of <i>w</i> to preserve search locality.</li>
- * </ul>
- *
- * <h2>4. Zero-Allocation Architecture &amp; Performance</h2>
- * <p>
- * All primitive working arrays ({@code deltaRawObjsFlat}, {@code compD0}, {@code candidateBuffer},
- * {@code currentWeightsBuffer}, {@code tradeOffCompIndex}, {@code transitionWeights},
- * {@code blueValBuffer}, {@code redValBuffer}) are pre-allocated during construction.
- * Sorting is performed via an in-place primitive quicksort.
- * This guarantees zero garbage collection overhead in the high-frequency evaluation loops of DRILS.
- * </p>
- *
- * <h2>5. CLI Integration &amp; Execution</h2>
- * <pre>
- *   java -jar McDRILSMO.jar mcdrilsmo -crossover mopx -delta 0.05 -r 1 -mf 0.2 -P objs=2 ...
- * </pre>
- *
- * @author Darrell Whitley, Francisco Chicano, Surendra Kurivella
- * @version 1.0
  */
 public class TransitionQPartitionCrossover extends PartitionCrossover {
 
@@ -160,13 +60,13 @@ public class TransitionQPartitionCrossover extends PartitionCrossover {
     private final int numObjectives;
     private final int[] objectiveMap;
 
-    // Zero-allocation evaluation buffers
+    // Working buffers for component evaluations
     private final double[] blueValBuffer;
     private final double[] redValBuffer;
     private final boolean[] affectedSubfnsBuffer;
     private final int[] touchedSubfnsBuffer;
 
-    // Pre-allocated component differentials (flattened: [maxN * numObjectives])
+    // Component differentials and scalar contributions
     private final boolean[] pickedBlue;
     private final double[] deltaRawObjsFlat;
     private final double[] compD0;
@@ -178,7 +78,7 @@ public class TransitionQPartitionCrossover extends PartitionCrossover {
     private final int[] tradeOffCompIndex;
     private final double[] transitionWeights;
 
-    // Micro-sweep window delta (0.0: full ray sweep [0, 1]; > 0.0: restricted to [0, delta])
+    // Window limit for transition sweep (0.0: full sweep [0, 1])
     private double delta = 0.0;
 
     /**
